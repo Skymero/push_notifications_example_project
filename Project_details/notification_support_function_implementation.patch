@@ -1,0 +1,389 @@
+diff --git a/functions/notification-support/package.json b/functions/notification-support/package.json
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/package.json
+@@
++{
++  "name": "notification-support",
++  "version": "1.0.0",
++  "private": true,
++  "type": "module",
++  "main": "dist/main.js",
++  "scripts": {
++    "build": "tsc",
++    "check": "tsc --noEmit"
++  },
++  "dependencies": {
++    "firebase-admin": "^13.5.0",
++    "node-appwrite": "^17.0.0"
++  },
++  "devDependencies": {
++    "@types/node": "^24.3.0",
++    "typescript": "^5.9.2"
++  }
++}
+diff --git a/functions/notification-support/tsconfig.json b/functions/notification-support/tsconfig.json
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/tsconfig.json
+@@
++{
++  "compilerOptions": {
++    "target": "ES2022",
++    "module": "ES2022",
++    "moduleResolution": "Bundler",
++    "strict": true,
++    "outDir": "dist",
++    "rootDir": "..",
++    "skipLibCheck": true
++  },
++  "include": ["src/**/*.ts", "../_shared/**/*.ts"]
++}
+diff --git a/functions/notification-support/README.md b/functions/notification-support/README.md
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/README.md
+@@
++# notification-support
++
++Routes notification support actions through one Appwrite Function for the Appwrite Free tier two-function architecture.
++
++Supported actions:
++
++* `sendValidation`
++* `receiveValidation`
++* `receipt`
++
++Appwrite Console settings:
++
++* Runtime: Node.js TypeScript
++* Root directory: `functions/notification-support`
++* Build command: `npm install && npm run build`
++* Entry point: `dist/notification-support/src/main.js`
++* Execute access: authenticated users
++
++Request envelope:
++
++```json
++{
++  "action": "receipt",
++  "payload": {}
++}
++```
+diff --git a/functions/notification-support/src/types.ts b/functions/notification-support/src/types.ts
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/src/types.ts
+@@
++export type SupportAction = 'sendValidation' | 'receiveValidation' | 'receipt';
++
++export type SupportRequest = {
++  action?: SupportAction;
++  payload?: unknown;
++};
++
++export type ReceiveValidationPayload = {
++  deviceId?: string;
++  idempotencyKey?: string;
++};
++
++export type ReceiptPayload = {
++  jobId?: string;
++  recipientRecordId?: string;
++  deviceId?: string;
++  eventType?: 'received' | 'displayed' | 'opened';
++  clientTimestamp?: string;
++  idempotencyKey?: string;
++  receiptNonce?: string;
++};
+diff --git a/functions/notification-support/src/main.ts b/functions/notification-support/src/main.ts
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/src/main.ts
+@@
++import { fail, parseJsonBody, withHandler } from '../../_shared/http';
++import { handleReceipt } from './handlers/receipt';
++import { handleReceiveValidation } from './handlers/receiveValidation';
++import { handleSendValidation } from './handlers/sendValidation';
++import type { AppwriteFunctionContext } from '../../_shared/http';
++import type { ReceiptPayload, ReceiveValidationPayload, SupportRequest } from './types';
++
++export default async function main(context: AppwriteFunctionContext) {
++  return withHandler(context, async () => {
++    const request = parseJsonBody<SupportRequest>(context.req.body);
++
++    switch (request.action) {
++      case 'sendValidation':
++        return handleSendValidation(context);
++      case 'receiveValidation':
++        return handleReceiveValidation(context, (request.payload ?? {}) as ReceiveValidationPayload);
++      case 'receipt':
++        return handleReceipt(context, (request.payload ?? {}) as ReceiptPayload);
++      default:
++        return fail(context, 400, 'INVALID_SUPPORT_ACTION', 'Unsupported notification support action.');
++    }
++  });
++}
+diff --git a/functions/notification-support/src/handlers/sendValidation.ts b/functions/notification-support/src/handlers/sendValidation.ts
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/src/handlers/sendValidation.ts
+@@
++import { fail, getAuthenticatedUserId, ok } from '../../../_shared/http';
++import { loadConfig } from '../../../_shared/env';
++import { getFirebaseMessaging } from '../../../_shared/firebase';
++import type { AppwriteFunctionContext } from '../../../_shared/http';
++
++export async function handleSendValidation(context: AppwriteFunctionContext) {
++  const userId = getAuthenticatedUserId(context);
++  if (!userId) {
++    return fail(context, 401, 'AUTH_REQUIRED', 'Sign in before sending notifications.');
++  }
++
++  const config = loadConfig();
++  getFirebaseMessaging(config);
++
++  return ok(context, {
++    color: 'green',
++    code: 'SEND_READY',
++    message: 'Authenticated Android user can reach the notification backend.',
++  });
++}
+diff --git a/functions/notification-support/src/handlers/receiveValidation.ts b/functions/notification-support/src/handlers/receiveValidation.ts
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/src/handlers/receiveValidation.ts
+@@
++import { randomUUID } from 'crypto';
++import { createAdminClients, Permission, Query, Role } from '../../../_shared/appwrite';
++import { loadConfig } from '../../../_shared/env';
++import { getFirebaseMessaging } from '../../../_shared/firebase';
++import { fail, getAuthenticatedUserId, ok } from '../../../_shared/http';
++import { createNotificationData, createReceiptNonce } from '../../../_shared/notificationPayload';
++import type { AppwriteFunctionContext } from '../../../_shared/http';
++import type { ReceiveValidationPayload } from '../types';
++
++const TITLE = 'Receive validation';
++const BODY = 'Confirming this Android device can receive push notifications.';
++
++export async function handleReceiveValidation(
++  context: AppwriteFunctionContext,
++  request: ReceiveValidationPayload,
++) {
++  const userId = getAuthenticatedUserId(context);
++  if (!userId) {
++    return fail(context, 401, 'AUTH_REQUIRED', 'Sign in before validating this device.');
++  }
++
++  if (!request.deviceId || !request.idempotencyKey) {
++    return fail(context, 400, 'INVALID_RECEIVE_VALIDATION_REQUEST', 'Device ID and idempotency key are required.');
++  }
++
++  const config = loadConfig();
++  const { databases } = createAdminClients(config);
++  const messaging = getFirebaseMessaging(config);
++  const now = new Date().toISOString();
++
++  const tokenResult = await databases.listDocuments(config.databaseId, config.deviceTokensCollectionId, [
++    Query.equal('userId', userId),
++    Query.equal('deviceId', request.deviceId),
++    Query.equal('platform', 'android'),
++    Query.limit(1),
++  ]);
++  const token = tokenResult.documents[0];
++
++  if (!token || !token.isActive || !token.fcmToken) {
++    return fail(context, 400, 'DEVICE_RECORD_INACTIVE', 'No active Android device token is registered.');
++  }
++
++  await databases.updateDocument(config.databaseId, config.deviceTokensCollectionId, token.$id, {
++    receiveStatus: 'untested',
++    lastValidatedAt: now,
++    updatedAt: now,
++  });
++
++  const jobId = randomUUID();
++  const recipientRecordId = randomUUID();
++  const receiptNonce = createReceiptNonce();
++
++  await databases.createDocument(
++    config.databaseId,
++    config.notificationJobsCollectionId,
++    jobId,
++    {
++      jobId,
++      idempotencyKey: request.idempotencyKey,
++      requestedByUserId: userId,
++      notificationType: 'receive_validation',
++      title: TITLE,
++      body: BODY,
++      status: 'processing',
++      targetCount: 1,
++      providerAcceptedCount: 0,
++      providerRejectedCount: 0,
++      confirmedCount: 0,
++      createdAt: now,
++      completedAt: null,
++    },
++    [Permission.read(Role.user(userId))],
++  );
++
++  try {
++    const providerMessageId = await messaging.send({
++      token: token.fcmToken,
++      notification: { title: TITLE, body: BODY },
++      data: createNotificationData(jobId, recipientRecordId, receiptNonce),
++      android: { priority: 'high', notification: { channelId: 'default' } },
++    });
++
++    await databases.createDocument(
++      config.databaseId,
++      config.notificationRecipientsCollectionId,
++      recipientRecordId,
++      {
++        recipientRecordId,
++        jobId,
++        recipientUserId: userId,
++        deviceTokenId: token.$id,
++        username: '',
++        platform: 'android',
++        providerMessageId,
++        dispatchStatus: 'accepted',
++        receiptStatus: 'not_confirmed',
++        failureCode: null,
++        failureMessage: null,
++        receiptNonce,
++        dispatchedAt: new Date().toISOString(),
++        receivedAt: null,
++        openedAt: null,
++      },
++      [Permission.read(Role.user(userId))],
++    );
++    await databases.updateDocument(config.databaseId, config.notificationJobsCollectionId, jobId, {
++      status: 'completed',
++      providerAcceptedCount: 1,
++      providerRejectedCount: 0,
++      completedAt: new Date().toISOString(),
++    });
++
++    return ok(context, {
++      color: 'yellow',
++      code: 'RECEIPT_PENDING',
++      message: 'Validation notification was accepted by FCM; waiting for device receipt.',
++      jobId,
++      recipientRecordId,
++    });
++  } catch {
++    await databases.updateDocument(config.databaseId, config.deviceTokensCollectionId, token.$id, {
++      tokenStatus: 'invalid',
++      receiveStatus: 'failed',
++      updatedAt: new Date().toISOString(),
++    });
++    await databases.updateDocument(config.databaseId, config.notificationJobsCollectionId, jobId, {
++      status: 'failed',
++      providerAcceptedCount: 0,
++      providerRejectedCount: 1,
++      completedAt: new Date().toISOString(),
++    });
++    return fail(context, 400, 'FCM_TOKEN_INVALID', 'FCM rejected the Android token during receive validation.');
++  }
++}
+diff --git a/functions/notification-support/src/handlers/receipt.ts b/functions/notification-support/src/handlers/receipt.ts
+new file mode 100644
+--- /dev/null
++++ b/functions/notification-support/src/handlers/receipt.ts
+@@
++import { createAdminClients, ID, Query } from '../../../_shared/appwrite';
++import { loadConfig } from '../../../_shared/env';
++import { fail, getAuthenticatedUserId, ok } from '../../../_shared/http';
++import type { AppwriteFunctionContext } from '../../../_shared/http';
++import type { ReceiptPayload } from '../types';
++
++export async function handleReceipt(context: AppwriteFunctionContext, request: ReceiptPayload) {
++  const userId = getAuthenticatedUserId(context);
++  if (!userId) {
++    return fail(context, 401, 'AUTH_REQUIRED', 'Sign in before submitting receipts.');
++  }
++
++  if (
++    !request.jobId ||
++    !request.recipientRecordId ||
++    !request.deviceId ||
++    !request.eventType ||
++    !request.clientTimestamp ||
++    !request.idempotencyKey
++  ) {
++    return fail(context, 400, 'RECEIPT_MALFORMED', 'Receipt request is missing required fields.');
++  }
++
++  const config = loadConfig();
++  const { databases } = createAdminClients(config);
++
++  const duplicate = await databases.listDocuments(config.databaseId, config.notificationReceiptsCollectionId, [
++    Query.equal('receiptId', request.idempotencyKey),
++    Query.limit(1),
++  ]);
++  if (duplicate.documents[0]) {
++    return ok(context, { ok: true, duplicate: true });
++  }
++
++  const recipient = await databases.getDocument(
++    config.databaseId,
++    config.notificationRecipientsCollectionId,
++    request.recipientRecordId,
++  );
++
++  if (recipient.jobId !== request.jobId || recipient.recipientUserId !== userId) {
++    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt does not belong to this user.');
++  }
++
++  if (recipient.receiptNonce && request.receiptNonce && recipient.receiptNonce !== request.receiptNonce) {
++    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt validation nonce did not match.');
++  }
++
++  const deviceToken = await databases.getDocument(
++    config.databaseId,
++    config.deviceTokensCollectionId,
++    recipient.deviceTokenId,
++  );
++
++  if (deviceToken.userId !== userId || deviceToken.deviceId !== request.deviceId || !deviceToken.isActive) {
++    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt device is not the active recipient device.');
++  }
++
++  const serverTimestamp = new Date().toISOString();
++  await databases.createDocument(config.databaseId, config.notificationReceiptsCollectionId, ID.unique(), {
++    receiptId: request.idempotencyKey,
++    jobId: request.jobId,
++    recipientRecordId: request.recipientRecordId,
++    recipientUserId: userId,
++    deviceId: request.deviceId,
++    eventType: request.eventType,
++    clientTimestamp: request.clientTimestamp,
++    serverTimestamp,
++  });
++
++  const recipientUpdate =
++    request.eventType === 'opened'
++      ? { receiptStatus: 'opened', openedAt: serverTimestamp }
++      : { receiptStatus: 'received', receivedAt: serverTimestamp };
++  await databases.updateDocument(
++    config.databaseId,
++    config.notificationRecipientsCollectionId,
++    request.recipientRecordId,
++    recipientUpdate,
++  );
++  await databases.updateDocument(config.databaseId, config.deviceTokensCollectionId, recipient.deviceTokenId, {
++    receiveStatus: 'verified',
++    tokenStatus: 'valid',
++    lastReceivedAt: serverTimestamp,
++    updatedAt: serverTimestamp,
++  });
++
++  const job = await databases.getDocument(config.databaseId, config.notificationJobsCollectionId, request.jobId);
++  await databases.updateDocument(config.databaseId, config.notificationJobsCollectionId, request.jobId, {
++    confirmedCount: Number(job.confirmedCount ?? 0) + 1,
++  });
++
++  return ok(context, { ok: true });
++}
