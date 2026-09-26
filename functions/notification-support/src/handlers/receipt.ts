@@ -1,96 +1,75 @@
-import { createAdminClients, ID, Query } from '../../../_shared/appwrite';
-import { loadConfig } from '../../../_shared/env';
-import { fail, ok } from '../../../_shared/http';
+import { createAdminClients } from '../../../_shared/appwrite';
+import { loadAppwriteConfig } from '../../../_shared/env';
+import { fail, isBoundedString, isDocumentId, isRecord, ok, RequestError } from '../../../_shared/http';
+import { deterministicId, matchesReceiptNonce } from '../../../_shared/notificationPayload';
+import { hasStatus, inTransaction } from '../../../_shared/transactions';
 import type { AppwriteFunctionContext } from '../../../_shared/http';
-import type { ReceiptPayload } from '../types';
 
-export async function handleReceipt(
-  context: AppwriteFunctionContext,
-  userId: string,
-  payload: unknown,
-) {
-  const request = (payload ?? {}) as ReceiptPayload;
-  if (
-    !request.jobId ||
-    !request.recipientRecordId ||
-    !request.deviceId ||
-    !request.eventType ||
-    !request.clientTimestamp ||
-    !request.idempotencyKey
-  ) {
-    return fail(context, 400, 'RECEIPT_MALFORMED', 'Receipt request is missing required fields.');
+export async function handleReceipt(context: AppwriteFunctionContext, userId: string, payload: unknown) {
+  if (!isRecord(payload) || !isDocumentId(payload.jobId) || !isDocumentId(payload.recipientRecordId) ||
+    !isDocumentId(payload.deviceId) || !isBoundedString(payload.idempotencyKey) ||
+    !isBoundedString(payload.receiptNonce, 128) || !isBoundedString(payload.clientTimestamp, 64) ||
+    !/^\d{4}-\d{2}-\d{2}T/.test(payload.clientTimestamp) || !Number.isFinite(Date.parse(payload.clientTimestamp)) ||
+    !['received', 'displayed', 'opened'].includes(String(payload.eventType))) {
+    return fail(context, 400, 'RECEIPT_MALFORMED', 'Receipt fields, timestamp, event type and nonce must be valid.');
   }
-
-  const config = loadConfig();
+  const request = payload as Record<string, string>;
+  const config = loadAppwriteConfig();
   const { databases } = createAdminClients(config);
-
-  const duplicate = await databases.listDocuments(config.databaseId, config.notificationReceiptsCollectionId, [
-    Query.equal('receiptId', request.idempotencyKey),
-    Query.limit(1),
-  ]);
-  if (duplicate.documents[0]) {
-    return ok(context, { ok: true, duplicate: true });
-  }
-
-  const recipient = await databases.getDocument(
-    config.databaseId,
-    config.notificationRecipientsCollectionId,
-    request.recipientRecordId,
-  );
-
-  if (recipient.jobId !== request.jobId || recipient.recipientUserId !== userId) {
-    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt does not belong to this user.');
-  }
-
-  if (recipient.receiptNonce && recipient.receiptNonce !== request.receiptNonce) {
-    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt validation nonce did not match.');
-  }
-
-  const deviceToken = await databases.getDocument(
-    config.databaseId,
-    config.deviceTokensCollectionId,
-    recipient.deviceTokenId,
-  );
-
-  if (deviceToken.userId !== userId || deviceToken.deviceId !== request.deviceId || !deviceToken.isActive) {
-    return fail(context, 403, 'RECEIPT_UNAUTHORIZED', 'Receipt device is not the active recipient device.');
-  }
-
-  const serverTimestamp = new Date().toISOString();
-  await databases.createDocument(config.databaseId, config.notificationReceiptsCollectionId, ID.unique(), {
-    receiptId: request.idempotencyKey,
-    jobId: request.jobId,
-    recipientRecordId: request.recipientRecordId,
-    recipientUserId: userId,
-    deviceId: request.deviceId,
-    eventType: request.eventType,
-    clientTimestamp: request.clientTimestamp,
-    serverTimestamp,
+  const databaseId = config.databaseId;
+  const auditId = deterministicId('receipt', userId, request.idempotencyKey);
+  const result = await inTransaction(databases, async (transactionId) => {
+    const read = async (collectionId: string, documentId: string) =>
+      databases.getDocument({ databaseId, collectionId, documentId, transactionId });
+    const recipient = await read(config.notificationRecipientsCollectionId, request.recipientRecordId)
+      .catch((error: unknown) => {
+        if (hasStatus(error, 404)) throw new RequestError(403, 'RECEIPT_UNAUTHORIZED', 'The receipt target is unavailable.');
+        throw error;
+      });
+    if (recipient.jobId !== request.jobId || recipient.recipientUserId !== userId) {
+      throw new RequestError(403, 'RECEIPT_UNAUTHORIZED', 'Receipt does not belong to this user.');
+    }
+    const token = await read(config.deviceTokensCollectionId, String(recipient.deviceTokenId));
+    if (token.userId !== userId || token.deviceId !== request.deviceId || !token.isActive ||
+      token.permissionStatus !== 'granted' || token.tokenStatus === 'invalid' || token.tokenStatus === 'revoked' ||
+      !matchesReceiptNonce(recipient.receiptNonce, request.receiptNonce, String(token.fcmToken))) {
+      throw new RequestError(403, 'RECEIPT_UNAUTHORIZED', 'Receipt does not match the current active device and delivery proof.');
+    }
+    const job = await read(config.notificationJobsCollectionId, request.jobId);
+    const audit = await read(config.notificationReceiptsCollectionId, auditId)
+      .catch((error: unknown) => { if (hasStatus(error, 404)) return null; throw error; });
+    if (audit) {
+      if (audit.jobId !== request.jobId || audit.recipientRecordId !== request.recipientRecordId ||
+        audit.recipientUserId !== userId || audit.deviceId !== request.deviceId || audit.eventType !== request.eventType) {
+        throw new RequestError(409, 'RECEIPT_IDEMPOTENCY_CONFLICT', 'Receipt key was already used for another event.');
+      }
+      return { ok: true, duplicate: true };
+    }
+    const serverTimestamp = new Date().toISOString();
+    await databases.createDocument({ databaseId, collectionId: config.notificationReceiptsCollectionId,
+      documentId: auditId, transactionId, permissions: [], data: {
+        receiptId: auditId, jobId: request.jobId, recipientRecordId: request.recipientRecordId,
+        recipientUserId: userId, deviceId: request.deviceId, eventType: request.eventType,
+        clientTimestamp: request.clientTimestamp, serverTimestamp,
+      } });
+    const wasConfirmed = recipient.receiptStatus === 'received' || recipient.receiptStatus === 'opened';
+    const opened = recipient.receiptStatus === 'opened' || request.eventType === 'opened';
+    await databases.updateDocument({ databaseId, collectionId: config.notificationRecipientsCollectionId,
+      documentId: request.recipientRecordId, transactionId, data: {
+        receiptStatus: opened ? 'opened' : 'received', receivedAt: recipient.receivedAt || serverTimestamp,
+        ...(request.eventType === 'opened' ? { openedAt: recipient.openedAt || serverTimestamp } : {}),
+      } });
+    const isCurrentValidation = !token.lastValidatedAt || Date.parse(String(job.createdAt)) >= Date.parse(String(token.lastValidatedAt));
+    await databases.updateDocument({ databaseId, collectionId: config.deviceTokensCollectionId,
+      documentId: token.$id, transactionId, data: { tokenStatus: 'valid',
+        ...(isCurrentValidation ? { receiveStatus: 'verified' } : {}),
+        lastReceivedAt: serverTimestamp, updatedAt: serverTimestamp,
+      } });
+    if (!wasConfirmed) {
+      await databases.incrementDocumentAttribute({ databaseId, collectionId: config.notificationJobsCollectionId,
+        documentId: request.jobId, attribute: 'confirmedCount', value: 1, transactionId });
+    }
+    return { ok: true };
   });
-
-  const recipientUpdate =
-    request.eventType === 'opened'
-      ? { receiptStatus: 'opened', openedAt: serverTimestamp }
-      : { receiptStatus: 'received', receivedAt: serverTimestamp };
-  await databases.updateDocument(
-    config.databaseId,
-    config.notificationRecipientsCollectionId,
-    request.recipientRecordId,
-    recipientUpdate,
-  );
-  await databases.updateDocument(config.databaseId, config.deviceTokensCollectionId, recipient.deviceTokenId, {
-    receiveStatus: 'verified',
-    tokenStatus: 'valid',
-    lastReceivedAt: serverTimestamp,
-    updatedAt: serverTimestamp,
-  });
-
-  if (recipient.receiptStatus !== 'received' && recipient.receiptStatus !== 'opened') {
-    const job = await databases.getDocument(config.databaseId, config.notificationJobsCollectionId, request.jobId);
-    await databases.updateDocument(config.databaseId, config.notificationJobsCollectionId, request.jobId, {
-      confirmedCount: Number(job.confirmedCount ?? 0) + 1,
-    });
-  }
-
-  return ok(context, { ok: true });
+  return ok(context, result);
 }

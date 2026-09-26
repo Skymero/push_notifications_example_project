@@ -34,15 +34,15 @@ export default function HomeScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState<'sign-in' | 'register'>('sign-in');
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const readiness = useNotificationReadiness(user);
-  const notificationJob = useNotificationJob();
+  const readiness = useNotificationReadiness(authLoading ? null : user);
+  const notificationJob = useNotificationJob(user?.$id ?? null);
 
   const canSend = useMemo(
-    () => readiness.sendStatus.color === 'green' && !notificationJob.isSending,
-    [notificationJob.isSending, readiness.sendStatus.color],
+    () => Boolean(user) && !authLoading && readiness.sendStatus.color === 'green' && !notificationJob.isSending,
+    [user, authLoading, notificationJob.isSending, readiness.sendStatus.color],
   );
 
   useEffect(() => {
@@ -54,26 +54,36 @@ export default function HomeScreen() {
   async function submitAuth() {
     setAuthError(null);
     setAuthLoading(true);
+    console.log('[AUTH] Starting auth, mode:', authMode, 'username:', username);
 
     try {
       const nextUser =
         authMode === 'register'
           ? await registerWithUsername(username, password)
           : await signInWithUsername(username, password);
+       console.log('[AUTH] Success, user:', nextUser);
       setUser(nextUser);
-    } catch {
+    } catch (error) {
+      console.error('[AUTH] Failed:', error);
       setAuthError('Authentication failed. Check Appwrite config, username, and password.');
     } finally {
+      console.log('[AUTH] Finally block, setting loading false');
       setAuthLoading(false);
     }
   }
 
   async function handleSignOut() {
-    if (user) {
-      await deactivateCurrentDeviceToken(user.$id);
+    setAuthLoading(true);
+    try {
+      if (user) await deactivateCurrentDeviceToken(user.$id);
+      await signOut();
+      setUser(null);
+      setPassword('');
+    } catch {
+      Alert.alert('Sign out failed', 'This device could not be deactivated or the session could not be closed. Check your connection and retry.');
+    } finally {
+      setAuthLoading(false);
     }
-    await signOut();
-    setUser(null);
   }
 
   async function handleSend() {
@@ -95,7 +105,7 @@ export default function HomeScreen() {
             <Text style={styles.subtitle}>Database-defined FCM validation and fanout</Text>
           </View>
           {user ? (
-            <Pressable style={styles.iconButton} onPress={handleSignOut} accessibilityLabel="Sign out">
+            <Pressable style={styles.iconButton} disabled={authLoading} onPress={handleSignOut} accessibilityLabel="Sign out">
               <MaterialIcons name="logout" size={20} color="#111827" />
             </Pressable>
           ) : null}
@@ -144,7 +154,7 @@ export default function HomeScreen() {
             </View>
             <Pressable
               style={[styles.primaryButton, authLoading && styles.disabledButton]}
-              disabled={authLoading || !username || password.length < 8}
+              disabled={!username || password.length < 3}
               onPress={submitAuth}
             >
               {authLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>Continue</Text>}

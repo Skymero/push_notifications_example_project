@@ -1,5 +1,7 @@
 # notification-send-validation
 
+> Retired source: do not deploy this function. Send readiness is routed through `notification-support`. The active workspace and package scripts exclude this folder; use the [two-function deployment guide](../../DOCS/Astra/Code-Reviews/Sep_1126_deployment_guide.md).
+
 Checks whether the authenticated Appwrite session can reach a deployed function. It does not send to FCM and does not read device tokens.
 
 Appwrite Console settings:

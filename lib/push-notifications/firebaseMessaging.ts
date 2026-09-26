@@ -26,7 +26,7 @@ function getMessaging(): MessagingModule | null {
 }
 
 export async function ensureFirebaseInitialized() {
-  return Boolean(getMessaging());
+  try { return Boolean(getMessaging()?.()); } catch { return false; }
 }
 
 export async function configureNotificationChannels() {
@@ -67,6 +67,11 @@ function normalizeAuthorizationStatus(status: number | undefined): PermissionSta
 export async function getNotificationPermissionStatus(): Promise<PermissionStatus> {
   const nativeStatus = await Notifications.getPermissionsAsync();
 
+  if (Platform.OS === 'android') {
+    return nativeStatus.granted ? 'granted' : nativeStatus.status === 'denied'
+      ? 'denied' : 'not_requested';
+  }
+
   if (nativeStatus.granted) {
     return 'granted';
   }
@@ -87,6 +92,11 @@ export async function getNotificationPermissionStatus(): Promise<PermissionStatu
 export async function requestNotificationPermission(): Promise<PermissionStatus> {
   const messaging = getMessaging();
   const expoStatus = await Notifications.requestPermissionsAsync();
+
+  if (Platform.OS === 'android') {
+    return expoStatus.granted ? 'granted' : expoStatus.status === 'denied'
+      ? 'denied' : 'not_requested';
+  }
 
   if (messaging) {
     const status = await messaging().requestPermission();

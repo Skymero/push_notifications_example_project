@@ -117,6 +117,7 @@ export type SubmitNotificationReceiptRequest = {
 };
 
 export type QueuedNotificationReceipt = SubmitNotificationReceiptRequest & {
+  ownerUserId: string;
   firstAttemptAt: string;
   lastAttemptAt: string;
   attemptCount: number;

@@ -1,5 +1,7 @@
 # notification-receipt
 
+> Retired source: do not deploy this function. Receipt handling is routed through `notification-support`. The active workspace and package scripts exclude this folder; use the [two-function deployment guide](../../DOCS/Astra/Code-Reviews/Sep_1126_deployment_guide.md).
+
 Accepts Android device receipt events, verifies authenticated ownership against the recipient record and device token, writes an idempotent receipt document, and updates recipient/job status.
 
 Appwrite Console settings:

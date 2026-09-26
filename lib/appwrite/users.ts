@@ -1,5 +1,6 @@
-import { ID, Permission, Query, Role, databases } from '@/lib/appwrite/client';
+import { Query, databases } from '@/lib/appwrite/client';
 import { appConfig } from '@/lib/config';
+import { ensureNotificationProfile } from '@/lib/appwrite/notifications';
 
 const { databaseId, collections } = appConfig.appwrite;
 
@@ -14,64 +15,20 @@ export type AppUserDocument = {
   updatedAt: string;
 };
 
-function ownerPermissions(userId: string) {
-  return [
-    Permission.read(Role.user(userId)),
-    Permission.update(Role.user(userId)),
-  ];
-}
-
 export async function getAppUserByAccountId(userId: string) {
+  console.log('[USERS] getAppUserByAccountId called with userId:', userId);
   const result = await databases.listDocuments(databaseId, collections.users, [
     Query.equal('userId', userId),
     Query.limit(1),
   ]);
-
+  console.log('[USERS] getAppUserByAccountId result:', result.documents.length, 'documents');
   return (result.documents[0] as unknown as AppUserDocument | undefined) ?? null;
 }
 
 export async function ensureAppUserDocument(userId: string, username: string) {
-  const existing = await getAppUserByAccountId(userId);
-  const now = new Date().toISOString();
-
-  if (existing) {
-    return (await databases.updateDocument(databaseId, collections.users, existing.$id, {
-      username,
-      updatedAt: now,
-    })) as unknown as AppUserDocument;
-  }
-
-  return (await databases.createDocument(
-    databaseId,
-    collections.users,
-    ID.unique(),
-    {
-      userId,
-      username,
-      notificationEnabled: false,
-      activeDeviceId: null,
-      activeDeviceTokenId: null,
-      createdAt: now,
-      updatedAt: now,
-    },
-    ownerPermissions(userId),
-  )) as unknown as AppUserDocument;
-}
-
-export async function updateActiveDeviceReference(
-  userId: string,
-  deviceId: string,
-  deviceTokenId: string,
-) {
-  const userDocument = await getAppUserByAccountId(userId);
-  if (!userDocument) {
-    return null;
-  }
-
-  return (await databases.updateDocument(databaseId, collections.users, userDocument.$id, {
-    notificationEnabled: true,
-    activeDeviceId: deviceId,
-    activeDeviceTokenId: deviceTokenId,
-    updatedAt: new Date().toISOString(),
-  })) as unknown as AppUserDocument;
+  console.log('[USERS] ensureAppUserDocument called with userId:', userId, 'username:', username);
+  // The authenticated function derives both identity and name from Appwrite Auth.
+  const result = await ensureNotificationProfile();
+  console.log('[USERS] ensureAppUserDocument completed, result:', result);
+  return result;
 }

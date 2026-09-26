@@ -11,15 +11,32 @@ export type AppwriteFunctionContext = {
 };
 
 export function parseJsonBody<T>(body: AppwriteFunctionContext['req']['body']): T {
-  if (!body) {
-    return {} as T;
+  let parsed: unknown = body ?? {};
+  try {
+    if (typeof body === 'string') parsed = JSON.parse(body || '{}');
+  } catch {
+    throw new RequestError(400, 'INVALID_JSON', 'Request body must be a JSON object.');
   }
-
-  if (typeof body === 'string') {
-    return JSON.parse(body || '{}') as T;
+  if (!isRecord(parsed)) {
+    throw new RequestError(400, 'INVALID_JSON', 'Request body must be a JSON object.');
   }
+  return parsed as T;
+}
 
-  return body as T;
+export class RequestError extends Error {
+  constructor(public status: number, public code: string, message: string) { super(message); }
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+export function isBoundedString(value: unknown, max = 128): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max && value.trim() === value;
+}
+
+export function isDocumentId(value: unknown): value is string {
+  return isBoundedString(value, 36) && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value);
 }
 
 export function getAuthenticatedUserId(context: AppwriteFunctionContext) {
@@ -52,7 +69,9 @@ export async function withHandler(
   try {
     return await handler();
   } catch (error) {
-    context.error(error instanceof Error ? error.message : 'Unknown function error');
+    if (error instanceof RequestError) return fail(context, error.status, error.code, error.message);
+    // Third-party exception messages can contain payloads or credentials.
+    context.error('Notification function operation failed.');
     return fail(context, 500, 'FUNCTION_UNAVAILABLE', 'Function execution failed.');
   }
 }

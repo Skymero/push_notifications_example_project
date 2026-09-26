@@ -1,6 +1,8 @@
 ﻿# Backend Spec Sheet
 ## Appwrite Functions: `notification-fanout` and `notification-support`
 
+> Deployment update (2026-09-11): use the [reviewed guide](../DOCS/Astra/Code-Reviews/Sep_1126_deployment_guide.md) and [database/permission delta](../DOCS/db_struct_notification_deployment.md) for current archive boundaries, support registration/profile actions, transactional receipts, rate-limit schema, and permission migration. The original source-folder build instructions below are historical.
+
 **Document status:** Draft  
 **Generated date:** 2026-09-07  
 **Target architecture:** Appwrite Free-tier option 2  

@@ -1,4 +1,3 @@
-.devin/
 node_modules/
 .expo/
 dist/
@@ -10,4 +9,6 @@ android/
 .env
 google-services.json
 GoogleService-Info.plist
+*-firebase-adminsdk-*.json
+firebase-admin-service-account*.json
 .expo-start*.log

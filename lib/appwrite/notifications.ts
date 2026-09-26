@@ -1,6 +1,5 @@
-import { ID, Permission, Query, Role, client, databases, functions } from '@/lib/appwrite/client';
+import { Query, client, databases, functions } from '@/lib/appwrite/client';
 import { appConfig } from '@/lib/config';
-import { updateActiveDeviceReference } from '@/lib/appwrite/users';
 import type {
   DeviceTokenRecord,
   InvokeNotificationFanoutRequest,
@@ -9,25 +8,48 @@ import type {
   NotificationJob,
   NotificationRecipient,
   PermissionStatus,
+  ReadinessState,
   SubmitNotificationReceiptRequest,
 } from '@/types/notifications';
 
 const { databaseId, collections, functions: functionIds } = appConfig.appwrite;
 
-type NotificationSupportAction = 'sendValidation' | 'receiveValidation' | 'receipt';
+type NotificationSupportAction = 'sendValidation' | 'receiveValidation' | 'receipt' | 'registerDevice' | 'deactivateDevice' | 'ensureProfile';
 
 function supportEnvelope(action: NotificationSupportAction, payload: Record<string, unknown>) {
   return { action, payload };
+}
+
+export class NotificationFunctionError extends Error {
+  constructor(public readonly code: string, public readonly status: number) {
+    super(`Notification service request failed (${code}).`);
+    this.name = 'NotificationFunctionError';
+  }
 }
 
 async function executeJson<T>(functionId: string, payload?: unknown): Promise<T> {
   const result = await functions.createExecution(
     functionId,
     payload === undefined ? undefined : JSON.stringify(payload),
+    false,
   );
 
-  const raw = result.responseBody || '{}';
-  return JSON.parse(raw) as T;
+  let body: unknown;
+  try {
+    body = JSON.parse(result.responseBody);
+  } catch {
+    throw new NotificationFunctionError('FUNCTION_INVALID_RESPONSE', result.responseStatusCode);
+  }
+  if (result.status !== 'completed' || result.responseStatusCode < 200 || result.responseStatusCode >= 300) {
+    const code = body && typeof body === 'object' && 'code' in body &&
+      typeof body.code === 'string' && /^[A-Z][A-Z0-9_]{1,79}$/.test(body.code)
+      ? body.code : 'FUNCTION_UNAVAILABLE';
+    throw new NotificationFunctionError(code, result.responseStatusCode);
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new NotificationFunctionError('FUNCTION_INVALID_RESPONSE', result.responseStatusCode);
+  }
+  return body as T;
 }
 
 export type UpsertDeviceTokenInput = {
@@ -42,54 +64,17 @@ export type UpsertDeviceTokenInput = {
 };
 
 export async function upsertDeviceToken(input: UpsertDeviceTokenInput) {
-  const existing = await getCurrentDeviceTokenRecord(input.userId, input.deviceId);
-  const now = new Date().toISOString();
-  const tokenChanged = Boolean(existing && existing.fcmToken !== (input.fcmToken ?? ''));
-  const data = {
-    userId: input.userId,
-    deviceId: input.deviceId,
-    fcmToken: input.fcmToken ?? '',
-    platform: input.platform,
-    appVersion: input.appVersion,
-    buildNumber: input.buildNumber ?? '',
-    permissionStatus: input.permissionStatus,
-    tokenStatus: input.fcmToken ? (tokenChanged ? 'rotated' : existing?.tokenStatus ?? 'untested') : 'invalid',
-    receiveStatus: tokenChanged ? 'untested' : existing?.receiveStatus ?? 'untested',
-    lastTokenRefreshAt: tokenChanged || input.tokenChanged ? now : existing?.lastTokenRefreshAt ?? null,
-    isActive: Boolean(input.fcmToken && input.permissionStatus !== 'denied'),
-    updatedAt: now,
-  };
+  const { userId, ...registration } = input;
+  const record = await executeJson<DeviceTokenRecord>(functionIds.support,
+    supportEnvelope('registerDevice', registration));
+  if (typeof record.$id !== 'string') throw new NotificationFunctionError('FUNCTION_INVALID_RESPONSE', 200);
+  return record;
+}
 
-  if (existing) {
-    const updated = (await databases.updateDocument(
-      databaseId,
-      collections.deviceTokens,
-      existing.$id,
-      data,
-    )) as unknown as DeviceTokenRecord;
-    await updateActiveDeviceReference(input.userId, input.deviceId, updated.$id);
-    return updated;
-  }
-
-  const created = (await databases.createDocument(
-    databaseId,
-    collections.deviceTokens,
-    ID.unique(),
-    {
-      ...data,
-      deviceTokenId: ID.unique(),
-      tokenStatus: input.fcmToken ? 'untested' : 'invalid',
-      receiveStatus: 'untested',
-      lastTokenRefreshAt: input.fcmToken ? now : null,
-      createdAt: now,
-    },
-    [
-      Permission.read(Role.user(input.userId)),
-      Permission.update(Role.user(input.userId)),
-    ],
-  )) as unknown as DeviceTokenRecord;
-  await updateActiveDeviceReference(input.userId, input.deviceId, created.$id);
-  return created;
+export function ensureNotificationProfile() {
+  console.log('[AUTH] Calling ensureProfile function');
+  return executeJson<import('@/lib/appwrite/users').AppUserDocument>(functionIds.support,
+    supportEnvelope('ensureProfile', {}));
 }
 
 export async function getCurrentDeviceTokenRecord(userId: string, deviceId: string) {
@@ -103,36 +88,60 @@ export async function getCurrentDeviceTokenRecord(userId: string, deviceId: stri
 }
 
 export async function deactivateDeviceToken(userId: string, deviceId: string) {
-  const existing = await getCurrentDeviceTokenRecord(userId, deviceId);
-  if (!existing) {
-    return null;
-  }
-
-  return (await databases.updateDocument(databaseId, collections.deviceTokens, existing.$id, {
-    isActive: false,
-    tokenStatus: 'revoked',
-    updatedAt: new Date().toISOString(),
-  })) as unknown as DeviceTokenRecord;
+  return executeJson<{ ok: boolean }>(functionIds.support,
+    supportEnvelope('deactivateDevice', { deviceId }));
 }
 
 export async function invokeSendValidation() {
-  return executeJson<{ color: 'green' | 'yellow' | 'red'; code: string; message: string }>(
+  return validateReadiness(await executeJson<ReadinessState>(
     functionIds.support,
     supportEnvelope('sendValidation', {}),
-  );
+  ));
 }
 
 export async function invokeReceiveValidation(deviceId: string, idempotencyKey: string) {
-  return executeJson<{ color: 'green' | 'yellow' | 'red'; code: string; message: string }>(
+  return validateReadiness(await executeJson<ReadinessState>(
     functionIds.support,
     supportEnvelope('receiveValidation', { deviceId, idempotencyKey }),
-  );
+  ));
+}
+
+function validateReadiness(result: ReadinessState) {
+  if (!['green', 'yellow', 'red'].includes(result.color) || typeof result.code !== 'string' || typeof result.message !== 'string') {
+    throw new NotificationFunctionError('FUNCTION_INVALID_RESPONSE', 200);
+  }
+  return result;
 }
 
 export async function invokeNotificationFanout(
   request: InvokeNotificationFanoutRequest,
+  userId: string,
+  isCancelled: () => boolean = () => false,
 ): Promise<InvokeNotificationFanoutResponse> {
-  return executeJson<InvokeNotificationFanoutResponse>(functionIds.fanout, request);
+  const findJob = async () => {
+    const result = await databases.listDocuments(databaseId, collections.notificationJobs, [
+      Query.equal('idempotencyKey', request.idempotencyKey),
+      Query.equal('requestedByUserId', userId),
+      Query.equal('notificationType', 'system_test'), Query.limit(1),
+    ]);
+    return result.documents[0] as unknown as NotificationJob | undefined;
+  };
+  // Resolve an uncertain previous invocation before scheduling another execution.
+  const existing = await findJob();
+  if (existing) return { jobId: existing.jobId, status: existing.status };
+  if (isCancelled()) throw new NotificationFunctionError('REQUEST_CANCELLED', 0);
+  const execution = await functions.createExecution(functionIds.fanout, JSON.stringify(request), true);
+  const startedAt = Date.now();
+  while (!isCancelled() && Date.now() - startedAt < 180000) {
+    const job = await findJob();
+    if (job) return { jobId: job.jobId, status: job.status };
+    const progress = await functions.getExecution(functionIds.fanout, execution.$id);
+    if (progress.status === 'failed' || progress.responseStatusCode >= 400) {
+      throw new NotificationFunctionError('FANOUT_EXECUTION_FAILED', progress.responseStatusCode);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new NotificationFunctionError(isCancelled() ? 'REQUEST_CANCELLED' : 'FUNCTION_TIMEOUT', 0);
 }
 
 export async function submitNotificationReceipt(request: SubmitNotificationReceiptRequest) {
@@ -152,12 +161,18 @@ export async function getNotificationJob(jobId: string) {
 }
 
 export async function listNotificationRecipients(jobId: string) {
-  const result = await databases.listDocuments(databaseId, collections.notificationRecipients, [
-    Query.equal('jobId', jobId),
-    Query.limit(100),
-  ]);
-
-  return result.documents as unknown as NotificationRecipient[];
+  const recipients: NotificationRecipient[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = await databases.listDocuments(databaseId, collections.notificationRecipients, [
+      Query.equal('jobId', jobId), Query.orderAsc('$id'), Query.limit(100),
+      ...(cursor ? [Query.cursorAfter(cursor)] : []),
+    ]);
+    recipients.push(...result.documents as unknown as NotificationRecipient[]);
+    if (result.documents.length < 100) return recipients;
+    cursor = result.documents[result.documents.length - 1].$id;
+  } while (cursor);
+  return recipients;
 }
 
 type RealtimeResponse<T> = {

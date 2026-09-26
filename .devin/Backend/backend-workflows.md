@@ -1,0 +1,6 @@
+- `appwrite-security-permissions.md` - Collection-level, document-level, team, function execution, and storage bucket permissions
+- `backend-security-checks.md` - SQL injection prevention, XSS prevention, CSRF protection, input sanitization, secret management
+- `appwrite-authorization-checks.md` - Permission validation, role-based access control, resource ownership verification, team/organization access, document-level security
+- `api-endpoint-design.md` - RESTful API design patterns, request/response structure, HTTP status codes, API versioning, rate limiting
+- `integration-service-patterns.md` - Third-party API integration, rate limiting/throttling, circuit breaker, retry logic with exponential backoff, webhook handling
+- `backend-testing-patterns.md` - Unit testing, integration testing with Appwrite, mocking external services, test data management, CI/CD integration

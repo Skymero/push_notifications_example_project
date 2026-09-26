@@ -9,8 +9,13 @@ import {
   Role,
 } from 'react-native-appwrite';
 import { appConfig } from '@/lib/config';
+import Constants from 'expo-constants';
 
 export const client = new Client();
+const androidPackage = Constants.expoConfig?.android?.package;
+if (androidPackage) {
+  client.setPlatform(androidPackage);
+}
 
 if (appConfig.appwrite.endpoint && appConfig.appwrite.projectId) {
   client.setEndpoint(appConfig.appwrite.endpoint).setProject(appConfig.appwrite.projectId);

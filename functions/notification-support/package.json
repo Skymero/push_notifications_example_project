@@ -2,15 +2,15 @@
   "name": "notification-support",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
-  "main": "dist/main.js",
+  "type": "commonjs",
+  "main": "dist/notification-support/src/main.js",
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "firebase-admin": "^13.5.0",
-    "node-appwrite": "^17.0.0"
+    "firebase-admin": "14.4.0",
+    "node-appwrite": "20.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

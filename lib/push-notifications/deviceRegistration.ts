@@ -40,7 +40,7 @@ export async function syncCurrentDeviceToken(userId: string) {
     fcmToken,
     platform: 'android',
     appVersion: Constants.expoConfig?.version ?? '0.0.0',
-    buildNumber: Device.osBuildId ?? undefined,
+    buildNumber: Device.osBuildId?.slice(0, 64) ?? undefined,
     permissionStatus,
   });
 }

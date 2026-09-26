@@ -1,4 +1,4 @@
-export type SupportAction = 'sendValidation' | 'receiveValidation' | 'receipt';
+export type SupportAction = 'sendValidation' | 'receiveValidation' | 'receipt' | 'registerDevice' | 'deactivateDevice' | 'ensureProfile';
 
 export type SupportEnvelope = {
   action?: SupportAction | string;

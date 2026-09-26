@@ -2,6 +2,8 @@
 
 Source documents:
 
+> Historical field reference: the [2026-09-11 database/permission delta](../DOCS/db_struct_notification_deployment.md) and [two-function deployment guide](../DOCS/Astra/Code-Reviews/Sep_1126_deployment_guide.md) supersede this sheet's four-function inventory, client-write grants, username uniqueness, and raw nonce semantics. Apply those changes before using the reviewed app.
+
 * `Project_details/example-template-backend-sheet.md`
 * `Project_details/database_defined_push_notification_prd.md`
 * `Project_details/push_notification_plantuml_diagrams.md`
