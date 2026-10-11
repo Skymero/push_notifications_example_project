@@ -3,8 +3,10 @@ const mockGetExecution = jest.fn();
 const mockListDocuments = jest.fn();
 
 import {
+  ensureNotificationProfile,
   invokeNotificationFanout,
   invokeSendValidation,
+  NOTIFICATION_PROFILE_TIMEOUT_MS,
   NotificationFunctionError,
   upsertDeviceToken,
 } from '@/lib/appwrite/notifications';
@@ -36,6 +38,21 @@ test('device registration never sends client-controlled ownership or readiness f
   expect(envelope.payload.userId).toBeUndefined();
   expect(envelope.payload.receiveStatus).toBeUndefined();
   expect(envelope.payload.tokenStatus).toBeUndefined();
+});
+
+test('notification profile provisioning has a bounded user-facing wait', async () => {
+  jest.useFakeTimers();
+  mockCreateExecution.mockReturnValueOnce(new Promise(() => undefined));
+  const result = ensureNotificationProfile();
+  const rejection = expect(result).rejects.toMatchObject<Partial<NotificationFunctionError>>({
+    code: 'FUNCTION_TIMEOUT', status: 0,
+  });
+
+  await jest.advanceTimersByTimeAsync(NOTIFICATION_PROFILE_TIMEOUT_MS);
+
+  await rejection;
+  expect(mockCreateExecution).toHaveBeenCalledTimes(1);
+  jest.useRealTimers();
 });
 
 test('fanout schedules an asynchronous execution and discovers the readable job by the same key', async () => {

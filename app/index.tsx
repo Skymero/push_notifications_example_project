@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,12 +16,21 @@ import { StatusBar } from 'expo-status-bar';
 import { MaterialIcons } from '@expo/vector-icons';
 import { hasAppwriteConfig } from '@/lib/config';
 import {
+  type AuthStage,
   type AuthUser,
+  AuthFlowError,
   getCurrentUser,
   registerWithUsername,
   signInWithUsername,
   signOut,
 } from '@/lib/appwrite/auth';
+import {
+  getAuthErrorMessage,
+  getNotificationProfileErrorMessage,
+  logAuthError,
+} from '@/lib/appwrite/authErrors';
+import { finishAuthSubmission, tryBeginAuthSubmission } from '@/lib/appwrite/authSubmission';
+import { ensureAppUserDocument } from '@/lib/appwrite/users';
 import { deactivateCurrentDeviceToken } from '@/lib/push-notifications/deviceRegistration';
 import { useNotificationReadiness } from '@/hooks/useNotificationReadiness';
 import { useNotificationJob } from '@/hooks/useNotificationJob';
@@ -29,51 +38,148 @@ import { StatusLed } from '@/components/StatusLed';
 import { NotificationJobSummary } from '@/components/NotificationJobSummary';
 import { RecipientCard } from '@/components/RecipientCard';
 
+type ProfileSetupState = 'idle' | 'loading' | 'ready' | 'error';
+
+const authProgressLabel = (stage: AuthStage | null) => {
+  switch (stage) {
+    case 'creating-account': return 'Creating account…';
+    case 'signing-in': return 'Signing in…';
+    case 'checking-session': return 'Checking session…';
+    case 'signing-out': return 'Signing out…';
+    default: return 'Working…';
+  }
+};
+
 export default function HomeScreen() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState<'sign-in' | 'register'>('sign-in');
-  const [authLoading, setAuthLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authStage, setAuthStage] = useState<AuthStage | null>('checking-session');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [profileSetup, setProfileSetup] = useState<ProfileSetupState>('idle');
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  const authSubmissionLock = useRef(false);
+  const profileAttempt = useRef(0);
 
-  const readiness = useNotificationReadiness(authLoading ? null : user);
-  const notificationJob = useNotificationJob(user?.$id ?? null);
+  const readinessUser = profileSetup === 'ready' ? user : null;
+  const readiness = useNotificationReadiness(readinessUser);
+  const notificationJob = useNotificationJob(readinessUser?.$id ?? null);
 
   const canSend = useMemo(
-    () => Boolean(user) && !authLoading && readiness.sendStatus.color === 'green' && !notificationJob.isSending,
-    [user, authLoading, notificationJob.isSending, readiness.sendStatus.color],
+    () => Boolean(user) && profileSetup === 'ready' && !authLoading &&
+      readiness.sendStatus.color === 'green' && !notificationJob.isSending,
+    [user, profileSetup, authLoading, notificationJob.isSending, readiness.sendStatus.color],
   );
 
   useEffect(() => {
-    getCurrentUser()
-      .then(setUser)
-      .finally(() => setAuthLoading(false));
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      profileAttempt.current += 1;
+    };
   }, []);
 
+  useEffect(() => {
+    getCurrentUser()
+      .then((currentUser) => {
+        if (mounted.current) setUser(currentUser);
+      })
+      .catch((error) => {
+        logAuthError(error, 'session-restore');
+        if (mounted.current) setAuthError(getAuthErrorMessage(error, 'session-restore'));
+      })
+      .finally(() => {
+        if (mounted.current) {
+          setAuthStage(null);
+          setAuthLoading(false);
+        }
+      });
+  }, []);
+
+  const prepareNotificationProfile = useCallback(async () => {
+    if (!user) return;
+    const attempt = ++profileAttempt.current;
+    setProfileSetup('loading');
+    setProfileError(null);
+    try {
+      await ensureAppUserDocument();
+      if (mounted.current && profileAttempt.current === attempt) {
+        setProfileSetup('ready');
+      }
+    } catch (error) {
+      const candidate = error as {
+        code?: number | string;
+        status?: number;
+        type?: string;
+      };
+      console.info('[AUTH] Notification profile setup unavailable', {
+        code: candidate?.code,
+        status: candidate?.status ??
+          (typeof candidate?.code === 'number' ? candidate.code : undefined),
+        type: candidate?.type,
+      });
+      if (mounted.current && profileAttempt.current === attempt) {
+        setProfileSetup('error');
+        setProfileError(getNotificationProfileErrorMessage(error));
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      profileAttempt.current += 1;
+      setProfileSetup('idle');
+      setProfileError(null);
+      return;
+    }
+    void prepareNotificationProfile();
+    return () => {
+      profileAttempt.current += 1;
+    };
+  }, [prepareNotificationProfile, user]);
+
   async function submitAuth() {
+    if (authLoading || !tryBeginAuthSubmission(authSubmissionLock)) return;
+    const operation = authMode;
+    const handleStage = (stage: AuthStage) => {
+      if (mounted.current) setAuthStage(stage);
+    };
     setAuthError(null);
     setAuthLoading(true);
-    console.log('[AUTH] Starting auth, mode:', authMode, 'username:', username);
+    setAuthStage(operation === 'register' ? 'creating-account' : 'signing-in');
 
     try {
       const nextUser =
-        authMode === 'register'
-          ? await registerWithUsername(username, password)
-          : await signInWithUsername(username, password);
-       console.log('[AUTH] Success, user:', nextUser);
-      setUser(nextUser);
+        operation === 'register'
+          ? await registerWithUsername(username, password, handleStage)
+          : await signInWithUsername(username, password, handleStage);
+      if (mounted.current) {
+        setUser(nextUser);
+        setPassword('');
+      }
     } catch (error) {
-      console.error('[AUTH] Failed:', error);
-      setAuthError('Authentication failed. Check Appwrite config, username, and password.');
+      logAuthError(error, operation);
+      if (mounted.current) {
+        setAuthError(getAuthErrorMessage(error, operation));
+        if (error instanceof AuthFlowError && error.accountCreated) {
+          setAuthMode('sign-in');
+        }
+      }
     } finally {
-      console.log('[AUTH] Finally block, setting loading false');
-      setAuthLoading(false);
+      finishAuthSubmission(authSubmissionLock);
+      if (mounted.current) {
+        setAuthStage(null);
+        setAuthLoading(false);
+      }
     }
   }
 
   async function handleSignOut() {
     setAuthLoading(true);
+    setAuthStage('signing-out');
     try {
       if (user) await deactivateCurrentDeviceToken(user.$id);
       await signOut();
@@ -82,7 +188,10 @@ export default function HomeScreen() {
     } catch {
       Alert.alert('Sign out failed', 'This device could not be deactivated or the session could not be closed. Check your connection and retry.');
     } finally {
-      setAuthLoading(false);
+      if (mounted.current) {
+        setAuthStage(null);
+        setAuthLoading(false);
+      }
     }
   }
 
@@ -141,12 +250,14 @@ export default function HomeScreen() {
             <View style={styles.segment}>
               <Pressable
                 style={[styles.segmentButton, authMode === 'sign-in' && styles.segmentActive]}
+                disabled={authLoading}
                 onPress={() => setAuthMode('sign-in')}
               >
                 <Text style={styles.segmentText}>Sign in</Text>
               </Pressable>
               <Pressable
                 style={[styles.segmentButton, authMode === 'register' && styles.segmentActive]}
+                disabled={authLoading}
                 onPress={() => setAuthMode('register')}
               >
                 <Text style={styles.segmentText}>Register</Text>
@@ -154,30 +265,53 @@ export default function HomeScreen() {
             </View>
             <Pressable
               style={[styles.primaryButton, authLoading && styles.disabledButton]}
-              disabled={!username || password.length < 3}
+              disabled={authLoading || !username || !password ||
+                (authMode === 'register' && password.length < 8)}
               onPress={submitAuth}
             >
-              {authLoading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primaryText}>Continue</Text>}
+              {authLoading ? (
+                <>
+                  <ActivityIndicator color="#ffffff" />
+                  <Text style={styles.primaryText}>{authProgressLabel(authStage)}</Text>
+                </>
+              ) : <Text style={styles.primaryText}>Continue</Text>}
             </Pressable>
           </View>
         ) : (
           <>
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Signed in as {user.name || user.email}</Text>
+              {profileSetup === 'loading' ? (
+                <View style={styles.inlineStatus}>
+                  <ActivityIndicator color="#2563eb" />
+                  <Text style={styles.muted}>Preparing notification profile…</Text>
+                </View>
+              ) : null}
+              {profileSetup === 'error' ? (
+                <>
+                  <Text style={styles.error}>{profileError}</Text>
+                  <Pressable style={styles.secondaryButton} onPress={() => void prepareNotificationProfile()}>
+                    <MaterialIcons name="refresh" size={18} color="#111827" />
+                    <Text style={styles.secondaryText}>Retry notification setup</Text>
+                  </Pressable>
+                </>
+              ) : null}
               <StatusLed label="Send notification readiness" status={readiness.sendStatus} />
               <StatusLed label="Receive notification readiness" status={readiness.receiveStatus} />
               <View style={styles.actions}>
                 <Pressable
-                  style={[styles.secondaryButton, readiness.isTesting && styles.disabledButton]}
-                  disabled={readiness.isTesting}
+                  style={[styles.secondaryButton,
+                    (profileSetup !== 'ready' || readiness.isTesting) && styles.disabledButton]}
+                  disabled={profileSetup !== 'ready' || readiness.isTesting}
                   onPress={readiness.setupAndroidNotifications}
                 >
                   <MaterialIcons name="notifications-active" size={18} color="#111827" />
                   <Text style={styles.secondaryText}>Setup Android notifications</Text>
                 </Pressable>
                 <Pressable
-                  style={[styles.secondaryButton, readiness.isTesting && styles.disabledButton]}
-                  disabled={readiness.isTesting}
+                  style={[styles.secondaryButton,
+                    (profileSetup !== 'ready' || readiness.isTesting) && styles.disabledButton]}
+                  disabled={profileSetup !== 'ready' || readiness.isTesting}
                   onPress={readiness.refreshReadiness}
                 >
                   <MaterialIcons name="refresh" size={18} color="#111827" />
@@ -365,6 +499,11 @@ const styles = StyleSheet.create({
   },
   muted: {
     color: '#6b7280',
+  },
+  inlineStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   error: {
     color: '#c2410c',

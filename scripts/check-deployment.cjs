@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const config = require('../app.config.js');
+const expectedAppwriteEndpoint = 'https://nyc.cloud.appwrite.io/v1';
 let failures = 0;
 const localEnv = {};
 const envPath = path.join(root, '.env');
@@ -21,6 +22,10 @@ for (const name of ['EXPO_PUBLIC_APPWRITE_ENDPOINT', 'EXPO_PUBLIC_APPWRITE_PROJE
   'EXPO_PUBLIC_APPWRITE_DATABASE_ID']) {
   check(Boolean(setting(name)), `${name} is configured for this local build`);
 }
+check(
+  setting('EXPO_PUBLIC_APPWRITE_ENDPOINT').replace(/\/+$/, '') === expectedAppwriteEndpoint,
+  'Appwrite endpoint targets this project\'s NYC region',
+);
 const firebasePath = path.resolve(root, setting('GOOGLE_SERVICES_JSON') || config.android.googleServicesFile);
 check(fs.existsSync(firebasePath), 'Firebase Android configuration file exists');
 if (fs.existsSync(firebasePath)) {

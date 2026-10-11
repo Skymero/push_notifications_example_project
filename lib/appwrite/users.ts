@@ -25,10 +25,7 @@ export async function getAppUserByAccountId(userId: string) {
   return (result.documents[0] as unknown as AppUserDocument | undefined) ?? null;
 }
 
-export async function ensureAppUserDocument(userId: string, username: string) {
-  console.log('[USERS] ensureAppUserDocument called with userId:', userId, 'username:', username);
+export async function ensureAppUserDocument() {
   // The authenticated function derives both identity and name from Appwrite Auth.
-  const result = await ensureNotificationProfile();
-  console.log('[USERS] ensureAppUserDocument completed, result:', result);
-  return result;
+  return ensureNotificationProfile();
 }

@@ -1,6 +1,5 @@
 node_modules/
 .expo/
-dist/
 functions/**/node_modules/
 functions/**/dist/
 web-build/

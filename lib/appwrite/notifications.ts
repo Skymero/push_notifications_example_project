@@ -16,6 +16,8 @@ const { databaseId, collections, functions: functionIds } = appConfig.appwrite;
 
 type NotificationSupportAction = 'sendValidation' | 'receiveValidation' | 'receipt' | 'registerDevice' | 'deactivateDevice' | 'ensureProfile';
 
+export const NOTIFICATION_PROFILE_TIMEOUT_MS = 15_000;
+
 function supportEnvelope(action: NotificationSupportAction, payload: Record<string, unknown>) {
   return { action, payload };
 }
@@ -72,9 +74,32 @@ export async function upsertDeviceToken(input: UpsertDeviceTokenInput) {
 }
 
 export function ensureNotificationProfile() {
-  console.log('[AUTH] Calling ensureProfile function');
-  return executeJson<import('@/lib/appwrite/users').AppUserDocument>(functionIds.support,
-    supportEnvelope('ensureProfile', {}));
+  const operation = executeJson<import('@/lib/appwrite/users').AppUserDocument>(
+    functionIds.support,
+    supportEnvelope('ensureProfile', {}),
+  );
+  return new Promise<import('@/lib/appwrite/users').AppUserDocument>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new NotificationFunctionError('FUNCTION_TIMEOUT', 0));
+    }, NOTIFICATION_PROFILE_TIMEOUT_MS);
+    operation.then(
+      (profile) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(profile);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 export async function getCurrentDeviceTokenRecord(userId: string, deviceId: string) {

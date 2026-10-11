@@ -1,0 +1,719 @@
+{
+  "database": {
+    "id": "push_notifications",
+    "name": "Push Notifications",
+    "apiModel": "collections_documents",
+    "relationshipAttributes": [],
+    "collections": [
+      {
+        "id": "users",
+        "name": "Users",
+        "documentSecurity": true,
+        "collectionPermissions": {
+          "read": [],
+          "create": [],
+          "update": [],
+          "delete": []
+        },
+        "documentReadPermissions": [
+          "user:{userId}"
+        ],
+        "attributes": [
+          {
+            "key": "userId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "username",
+            "type": "string",
+            "size": 100,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "notificationEnabled",
+            "type": "boolean",
+            "required": true,
+            "default": false
+          },
+          {
+            "key": "activeDeviceId",
+            "type": "string",
+            "size": 128,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "activeDeviceTokenId",
+            "type": "string",
+            "size": 64,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "createdAt",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "updatedAt",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          }
+        ],
+        "indexes": [
+          {
+            "key": "user_id_unique",
+            "type": "unique",
+            "attributes": [
+              "userId"
+            ]
+          },
+          {
+            "key": "username_index",
+            "type": "key",
+            "attributes": [
+              "username"
+            ]
+          },
+          {
+            "key": "active_device_token_id_index",
+            "type": "key",
+            "attributes": [
+              "activeDeviceTokenId"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "device_tokens",
+        "name": "Device Tokens",
+        "documentSecurity": true,
+        "collectionPermissions": {
+          "read": [],
+          "create": [],
+          "update": [],
+          "delete": []
+        },
+        "documentReadPermissions": [
+          "user:{userId}"
+        ],
+        "attributes": [
+          {
+            "key": "deviceTokenId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "userId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "deviceId",
+            "type": "string",
+            "size": 128,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "fcmToken",
+            "type": "string",
+            "size": 4096,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "platform",
+            "type": "enum",
+            "required": true,
+            "default": "android",
+            "elements": [
+              "android"
+            ]
+          },
+          {
+            "key": "appVersion",
+            "type": "string",
+            "size": 32,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "buildNumber",
+            "type": "string",
+            "size": 64,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "permissionStatus",
+            "type": "enum",
+            "required": true,
+            "default": "unknown",
+            "elements": [
+              "granted",
+              "denied",
+              "not_requested",
+              "unknown"
+            ]
+          },
+          {
+            "key": "tokenStatus",
+            "type": "enum",
+            "required": true,
+            "default": "untested",
+            "elements": [
+              "untested",
+              "valid",
+              "invalid",
+              "rotated",
+              "revoked"
+            ]
+          },
+          {
+            "key": "receiveStatus",
+            "type": "enum",
+            "required": true,
+            "default": "untested",
+            "elements": [
+              "untested",
+              "verified",
+              "failed",
+              "expired"
+            ]
+          },
+          {
+            "key": "lastValidatedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "lastReceivedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "lastTokenRefreshAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "isActive",
+            "type": "boolean",
+            "required": true,
+            "default": true
+          },
+          {
+            "key": "createdAt",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "updatedAt",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          }
+        ],
+        "indexes": [
+          {
+            "key": "user_id_device_id_unique",
+            "type": "unique",
+            "attributes": [
+              "userId",
+              "deviceId"
+            ]
+          },
+          {
+            "key": "active_send_targets",
+            "type": "key",
+            "attributes": [
+              "platform",
+              "isActive",
+              "permissionStatus",
+              "tokenStatus"
+            ]
+          },
+          {
+            "key": "user_id_index",
+            "type": "key",
+            "attributes": [
+              "userId"
+            ]
+          },
+          {
+            "key": "device_id_index",
+            "type": "key",
+            "attributes": [
+              "deviceId"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "notification_jobs",
+        "name": "Notification Jobs",
+        "documentSecurity": true,
+        "collectionPermissions": {
+          "read": [],
+          "create": [],
+          "update": [],
+          "delete": []
+        },
+        "documentReadPermissions": [
+          "user:{requestedByUserId}"
+        ],
+        "attributes": [
+          {
+            "key": "jobId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "idempotencyKey",
+            "type": "string",
+            "size": 160,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "rateLimitKey",
+            "type": "string",
+            "size": 64,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "requestedByUserId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "notificationType",
+            "type": "enum",
+            "required": true,
+            "default": "system_test",
+            "elements": [
+              "system_test",
+              "receive_validation"
+            ]
+          },
+          {
+            "key": "title",
+            "type": "string",
+            "size": 160,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "body",
+            "type": "string",
+            "size": 512,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "status",
+            "type": "enum",
+            "required": true,
+            "default": "queued",
+            "elements": [
+              "queued",
+              "processing",
+              "completed",
+              "partially_completed",
+              "failed"
+            ]
+          },
+          {
+            "key": "targetCount",
+            "type": "integer",
+            "required": true,
+            "default": 0,
+            "min": 0
+          },
+          {
+            "key": "providerAcceptedCount",
+            "type": "integer",
+            "required": true,
+            "default": 0,
+            "min": 0
+          },
+          {
+            "key": "providerRejectedCount",
+            "type": "integer",
+            "required": true,
+            "default": 0,
+            "min": 0
+          },
+          {
+            "key": "confirmedCount",
+            "type": "integer",
+            "required": true,
+            "default": 0,
+            "min": 0
+          },
+          {
+            "key": "createdAt",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "completedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          }
+        ],
+        "indexes": [
+          {
+            "key": "job_id_unique",
+            "type": "unique",
+            "attributes": [
+              "jobId"
+            ]
+          },
+          {
+            "key": "requester_idempotency_unique",
+            "type": "unique",
+            "attributes": [
+              "requestedByUserId",
+              "idempotencyKey"
+            ]
+          },
+          {
+            "key": "client_fanout_lookup",
+            "type": "key",
+            "attributes": [
+              "requestedByUserId",
+              "notificationType",
+              "idempotencyKey"
+            ]
+          },
+          {
+            "key": "rate_limit_key_unique",
+            "type": "unique",
+            "attributes": [
+              "rateLimitKey"
+            ]
+          },
+          {
+            "key": "requested_by_user_id_index",
+            "type": "key",
+            "attributes": [
+              "requestedByUserId"
+            ]
+          },
+          {
+            "key": "status_created_at_index",
+            "type": "key",
+            "attributes": [
+              "status",
+              "createdAt"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "notification_recipients",
+        "name": "Notification Recipients",
+        "documentSecurity": true,
+        "collectionPermissions": {
+          "read": [],
+          "create": [],
+          "update": [],
+          "delete": []
+        },
+        "documentReadPermissions": [
+          "user:{requestedByUserIdFromParentJob}",
+          "user:{recipientUserId}"
+        ],
+        "attributes": [
+          {
+            "key": "recipientRecordId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "jobId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "recipientUserId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "deviceTokenId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "username",
+            "type": "string",
+            "size": 100,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "platform",
+            "type": "enum",
+            "required": true,
+            "default": "android",
+            "elements": [
+              "android"
+            ]
+          },
+          {
+            "key": "providerMessageId",
+            "type": "string",
+            "size": 256,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "dispatchStatus",
+            "type": "enum",
+            "required": true,
+            "default": "pending",
+            "elements": [
+              "pending",
+              "accepted",
+              "rejected",
+              "error"
+            ]
+          },
+          {
+            "key": "receiptStatus",
+            "type": "enum",
+            "required": true,
+            "default": "not_confirmed",
+            "elements": [
+              "not_confirmed",
+              "received",
+              "opened",
+              "expired"
+            ]
+          },
+          {
+            "key": "failureCode",
+            "type": "string",
+            "size": 128,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "failureMessage",
+            "type": "string",
+            "size": 512,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "receiptNonce",
+            "type": "string",
+            "size": 128,
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "dispatchedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "receivedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          },
+          {
+            "key": "openedAt",
+            "type": "datetime",
+            "required": false,
+            "default": null
+          }
+        ],
+        "indexes": [
+          {
+            "key": "recipient_record_id_unique",
+            "type": "unique",
+            "attributes": [
+              "recipientRecordId"
+            ]
+          },
+          {
+            "key": "job_id_index",
+            "type": "key",
+            "attributes": [
+              "jobId"
+            ]
+          },
+          {
+            "key": "recipient_user_id_index",
+            "type": "key",
+            "attributes": [
+              "recipientUserId"
+            ]
+          },
+          {
+            "key": "job_recipient_user_index",
+            "type": "key",
+            "attributes": [
+              "jobId",
+              "recipientUserId"
+            ]
+          },
+          {
+            "key": "job_dispatch_receipt_index",
+            "type": "key",
+            "attributes": [
+              "jobId",
+              "dispatchStatus",
+              "receiptStatus"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "notification_receipts",
+        "name": "Notification Receipts",
+        "documentSecurity": true,
+        "collectionPermissions": {
+          "read": [],
+          "create": [],
+          "update": [],
+          "delete": []
+        },
+        "documentReadPermissions": [],
+        "attributes": [
+          {
+            "key": "receiptId",
+            "type": "string",
+            "size": 192,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "jobId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "recipientRecordId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "recipientUserId",
+            "type": "string",
+            "size": 64,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "deviceId",
+            "type": "string",
+            "size": 128,
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "eventType",
+            "type": "enum",
+            "required": true,
+            "default": "received",
+            "elements": [
+              "received",
+              "displayed",
+              "opened"
+            ]
+          },
+          {
+            "key": "clientTimestamp",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          },
+          {
+            "key": "serverTimestamp",
+            "type": "datetime",
+            "required": true,
+            "default": null
+          }
+        ],
+        "indexes": [
+          {
+            "key": "receipt_id_unique",
+            "type": "unique",
+            "attributes": [
+              "receiptId"
+            ]
+          },
+          {
+            "key": "job_id_index",
+            "type": "key",
+            "attributes": [
+              "jobId"
+            ]
+          },
+          {
+            "key": "recipient_record_id_index",
+            "type": "key",
+            "attributes": [
+              "recipientRecordId"
+            ]
+          },
+          {
+            "key": "recipient_user_id_index",
+            "type": "key",
+            "attributes": [
+              "recipientUserId"
+            ]
+          },
+          {
+            "key": "job_event_type_index",
+            "type": "key",
+            "attributes": [
+              "jobId",
+              "eventType"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
