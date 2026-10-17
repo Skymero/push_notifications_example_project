@@ -4,7 +4,9 @@ import { Permission, Query, Role } from './appwrite';
 import type { FunctionConfig } from './env';
 import { RequestError } from './http';
 import { deterministicId } from './notificationPayload';
-import { hasStatus } from './transactions';
+import { hasStatus, inTransaction } from './transactions';
+
+export type TerminalJobStatus = 'completed' | 'partially_completed' | 'failed';
 
 export async function assertJobSchema(databases: Databases, config: FunctionConfig) {
   const collection = await databases.getCollection(config.databaseId, config.notificationJobsCollectionId);
@@ -61,6 +63,35 @@ export async function claimJob(
     }
     throw new RequestError(429, 'RATE_LIMITED', 'Wait briefly before sending another notification.');
   }
+}
+
+export async function finalizeClaimedJob(
+  databases: Databases,
+  config: FunctionConfig,
+  jobId: string,
+  result: { status: TerminalJobStatus; accepted: number; rejected: number },
+) {
+  return inTransaction(databases, async (transactionId) => {
+    const current = await databases.getDocument({
+      databaseId: config.databaseId,
+      collectionId: config.notificationJobsCollectionId,
+      documentId: jobId,
+      transactionId,
+    });
+    if (current.status !== 'processing') return current;
+    return databases.updateDocument({
+      databaseId: config.databaseId,
+      collectionId: config.notificationJobsCollectionId,
+      documentId: jobId,
+      transactionId,
+      data: {
+        status: result.status,
+        providerAcceptedCount: result.accepted,
+        providerRejectedCount: result.rejected,
+        completedAt: new Date().toISOString(),
+      },
+    });
+  });
 }
 
 async function retireStaleJob(databases: Databases, config: FunctionConfig, job: any) {

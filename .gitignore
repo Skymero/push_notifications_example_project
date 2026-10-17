@@ -10,4 +10,5 @@ google-services.json
 GoogleService-Info.plist
 *-firebase-adminsdk-*.json
 firebase-admin-service-account*.json
+appwrite-function-env/
 .expo-start*.log

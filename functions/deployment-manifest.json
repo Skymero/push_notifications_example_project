@@ -1,0 +1,50 @@
+{
+  "endpoint": "https://nyc.cloud.appwrite.io/v1",
+  "projectId": "6a921fef001e644048b0",
+  "functions": [
+    {
+      "id": "6acbed74003d5dcd9af9",
+      "name": "Notification Support",
+      "runtime": "node-26",
+      "timeout": 60,
+      "entrypoint": "dist/notification-support/src/main.js",
+      "commands": "npm ci --omit=dev",
+      "requiredVariables": [
+        "APPWRITE_API_KEY",
+        "APPWRITE_DATABASE_ID",
+        "APPWRITE_DEVICE_TOKENS_COLLECTION_ID",
+        "APPWRITE_ENDPOINT",
+        "APPWRITE_NOTIFICATION_JOBS_COLLECTION_ID",
+        "APPWRITE_NOTIFICATION_RECEIPTS_COLLECTION_ID",
+        "APPWRITE_NOTIFICATION_RECIPIENTS_COLLECTION_ID",
+        "APPWRITE_PROJECT_ID",
+        "APPWRITE_USERS_COLLECTION_ID",
+        "FIREBASE_CLIENT_EMAIL",
+        "FIREBASE_PRIVATE_KEY",
+        "FIREBASE_PROJECT_ID"
+      ]
+    },
+    {
+      "id": "6acbecda0007de28bf66",
+      "name": "notifications fanout",
+      "runtime": "node-26",
+      "timeout": 60,
+      "entrypoint": "dist/notification-fanout/src/main.js",
+      "commands": "npm ci --omit=dev",
+      "requiredVariables": [
+        "APPWRITE_API_KEY",
+        "APPWRITE_DATABASE_ID",
+        "APPWRITE_DEVICE_TOKENS_COLLECTION_ID",
+        "APPWRITE_ENDPOINT",
+        "APPWRITE_NOTIFICATION_JOBS_COLLECTION_ID",
+        "APPWRITE_NOTIFICATION_RECEIPTS_COLLECTION_ID",
+        "APPWRITE_NOTIFICATION_RECIPIENTS_COLLECTION_ID",
+        "APPWRITE_PROJECT_ID",
+        "APPWRITE_USERS_COLLECTION_ID",
+        "FIREBASE_CLIENT_EMAIL",
+        "FIREBASE_PRIVATE_KEY",
+        "FIREBASE_PROJECT_ID"
+      ]
+    }
+  ]
+}

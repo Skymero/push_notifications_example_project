@@ -19,15 +19,20 @@ function run(command, args, cwd, capture = false) {
 
 for (const name of ['notification-fanout', 'notification-support']) {
   const archive = path.join(root, 'dist', 'functions', `${name}.tar.gz`);
-  const entries = run('tar', ['-tzf', archive], root, true).trim().split(/\r?\n/);
+  const entries = run('tar', ['-tzf', archive, '--force-local'], root, true).trim().split(/\r?\n/);
   for (const entry of entries) {
     if (!(entry === 'package.json' || entry === 'package-lock.json' || entry.startsWith('dist/')) ||
         /(^|\/)(\.\.|node_modules|\.env[^/]*|notification-receipt|notification-send-validation|notification-receive-validation)(\/|$)/.test(entry)) {
       throw new Error(`Unexpected archive entry: ${entry}`);
     }
   }
+  // The live build command is `npm ci --omit=dev`, which fails without a lockfile.
+  if (!entries.includes('package-lock.json')) {
+    throw new Error(`${name}: archive is missing package-lock.json required by npm ci.`);
+  }
   const isolated = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-smoke-`));
-  run('tar', ['-xzf', archive, '-C', isolated], root);
+  // Extract with cwd instead of -C; GNU tar rejects drive-letter -C paths.
+  run('tar', ['-xzf', archive, '--force-local'], isolated);
   run(process.execPath, [npmCli, 'ci', '--omit=dev', '--ignore-scripts',
     '--no-audit', '--no-fund', '--workspaces=false',
     ...(process.env.FUNCTIONS_OFFLINE === '1' ? ['--offline'] : [])], isolated);

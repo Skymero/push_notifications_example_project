@@ -21,6 +21,8 @@ export type FunctionConfig = AppwriteConfig & {
   validationCooldownSeconds: number;
 };
 
+export const MAX_FANOUT_LIMIT = 25;
+
 function required(name: string) {
   const value = process.env[name];
   if (!value) {
@@ -64,13 +66,13 @@ export function loadConfig(): FunctionConfig {
     firebaseClientEmail: required('FIREBASE_CLIENT_EMAIL'),
     firebasePrivateKey: required('FIREBASE_PRIVATE_KEY').replace(/\\n/g, '\n'),
     includeSender: process.env.NOTIFICATION_INCLUDE_SENDER !== 'false',
-    fanoutLimit: optionalPositiveInteger('NOTIFICATION_FANOUT_LIMIT', 100),
+    fanoutLimit: optionalPositiveInteger('NOTIFICATION_FANOUT_LIMIT', MAX_FANOUT_LIMIT),
     jobStaleSeconds: optionalPositiveInteger('NOTIFICATION_JOB_STALE_SECONDS', 300),
     fanoutCooldownSeconds: optionalPositiveInteger('NOTIFICATION_FANOUT_COOLDOWN_SECONDS', 10),
     validationCooldownSeconds: optionalPositiveInteger('NOTIFICATION_VALIDATION_COOLDOWN_SECONDS', 30),
   };
-  if (config.fanoutLimit > 100) {
-    throw new Error('NOTIFICATION_FANOUT_LIMIT must be at most 100.');
+  if (config.fanoutLimit > MAX_FANOUT_LIMIT) {
+    throw new Error(`NOTIFICATION_FANOUT_LIMIT must be at most ${MAX_FANOUT_LIMIT}.`);
   }
   return config;
 }

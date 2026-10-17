@@ -1,5 +1,14 @@
 ﻿# DOCS ChangeLog
 
+## 2026-10-11
+
+- Wired `productionLock()` into `scripts/package-functions.cjs` so each function archive ships a pruned `package-lock.json` (212 entries — the function's own dependency closure walked from the root lockfile, not the 1055-package monorepo tree). Without it, the documented `npm ci --omit=dev` Appwrite build command would fail for lack of a lockfile.
+- Switched `scripts/verify-function-packages.cjs` from `npm install` to `npm ci --omit=dev` so the smoke test exercises the real live install path, and added a hard failure when an archive lacks `package-lock.json`.
+- Added `--force-local` to all `tar` invocations and replaced `-C <dir>` with running tar from the target directory, so the scripts work under GNU tar (Git Bash) as well as Windows bsdtar (PowerShell); GNU tar previously rejected drive-letter paths.
+- Verified: `functions:package`, `functions:smoke` (211 packages installed via `npm ci`, isolated runtime import + `AUTH_REQUIRED` auth boundary pass for both functions), archive inventories contain `package.json`, `package-lock.json`, `dist/<fn>/src/main.js`, `dist/_shared/*.js`, and archived `package.json.main` matches the expected compiled entrypoints.
+- Added `scripts/deploy-function.cjs` to run the entrypoint update, archive upload, ready-poll, activation, and unauthenticated probe for one function at a time; currently blocked pending an API key with `functions.write` scope.
+- Added `DOCS/TaskList/Oct_1126_notification_functions_review_fixes.md` — junior-dev checklist for the code-review findings (timeout sizing, receiveValidation finalization, notificationType payload, pending-recipient reconciliation, device-write rate limiting, and smaller cleanups).
+
 ## 2026-09-11
 
 - Added `DOCS/TaskList/Sep_1126_firebase_console_google_services_setup.md` with the exact Firebase Console, Android client file, Firebase Admin credential, EAS/local build, and two-device verification procedure; added ignore patterns for common Firebase Admin key filenames.

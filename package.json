@@ -11,7 +11,10 @@
     "functions:check": "npm run check --workspaces --if-present",
     "functions:build": "npm run build --workspaces",
     "functions:package": "node scripts/package-functions.cjs",
+    "functions:reproducibility": "node scripts/check-function-reproducibility.cjs",
     "functions:smoke": "node scripts/verify-function-packages.cjs",
+    "functions:benchmark": "node scripts/benchmark-fanout.cjs",
+    "functions:remote-check": "node scripts/check-remote-functions.cjs",
     "deployment:check": "node scripts/check-deployment.cjs",
     "ios": "expo run:ios"
   },

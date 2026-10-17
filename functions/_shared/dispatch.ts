@@ -9,6 +9,28 @@ import { inTransaction } from './transactions';
 
 export type DispatchDevice = { $id: string; userId: string; deviceId: string; fcmToken: string };
 
+export async function rejectOrphanedDevice(
+  databases: Databases,
+  config: FunctionConfig,
+  input: { jobId: string; requesterId: string; token: DispatchDevice },
+) {
+  const now = new Date().toISOString();
+  await databases.updateDocument(config.databaseId, config.deviceTokensCollectionId, input.token.$id, {
+    tokenStatus: 'invalid', receiveStatus: 'failed', isActive: false, updatedAt: now,
+  });
+  const recipientRecordId = randomUUID();
+  const nonce = createReceiptNonce();
+  await databases.createDocument(config.databaseId, config.notificationRecipientsCollectionId, recipientRecordId, {
+    recipientRecordId, jobId: input.jobId, recipientUserId: input.token.userId,
+    deviceTokenId: input.token.$id, username: 'Unavailable user', platform: 'android',
+    providerMessageId: null, dispatchStatus: 'rejected', receiptStatus: 'not_confirmed',
+    failureCode: 'RECIPIENT_ACCOUNT_MISSING', failureMessage: 'Recipient account is unavailable.',
+    receiptNonce: hashReceiptNonce(nonce, input.token.fcmToken), dispatchedAt: now,
+    receivedAt: null, openedAt: null,
+  }, [Permission.read(Role.user(input.requesterId))]);
+  return { recipientRecordId, accepted: false, permanentFailure: true };
+}
+
 /** Persist proof and recipient binding before FCM can deliver; never overwrite receipt state afterward. */
 export async function dispatchNotification(databases: Databases, messaging: Messaging, config: FunctionConfig,
   input: { jobId: string; requesterId: string; token: DispatchDevice; title: string; body: string; username: string },

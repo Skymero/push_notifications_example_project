@@ -30,7 +30,11 @@ class DatabaseDouble {
   transactions = new Map<string, Tx>();
   sequence = 0;
   conflicts = 0;
+  failListCollection: string | null = null;
+  failCreateCollection: string | null = null;
   failUpdateCollection: string | null = null;
+  failUpdateOnCall: { collection: string; call: number } | null = null;
+  updateCalls = new Map<string, number>();
   loseCommitResponse = false;
   schemaReady = true;
   seed(collection: string, value: Doc) {
@@ -63,6 +67,7 @@ class DatabaseDouble {
   });
   listDocuments = jest.fn(async (...args: any[]) => {
     const a = this.args(args, ['databaseId', 'collectionId', 'queries', 'transactionId']);
+    if (a.collectionId === this.failListCollection) { this.failListCollection = null; throw errorWithCode(503); }
     let rows = this.all(a.collectionId);
     for (const raw of a.queries ?? []) {
       const q = JSON.parse(raw);
@@ -74,6 +79,7 @@ class DatabaseDouble {
   });
   createDocument = jest.fn(async (...args: any[]) => {
     const a = this.args(args, ['databaseId', 'collectionId', 'documentId', 'data', 'permissions', 'transactionId']);
+    if (a.collectionId === this.failCreateCollection) { this.failCreateCollection = null; throw errorWithCode(503); }
     try { this.read(a.collectionId, a.documentId, a.transactionId); throw errorWithCode(409); }
     catch (error: any) { if (error.code !== 404) throw error; }
     if (a.data.rateLimitKey && this.all(a.collectionId).some((doc) => doc.rateLimitKey === a.data.rateLimitKey)) throw errorWithCode(409);
@@ -81,6 +87,12 @@ class DatabaseDouble {
   });
   updateDocument = jest.fn(async (...args: any[]) => {
     const a = this.args(args, ['databaseId', 'collectionId', 'documentId', 'data', 'permissions', 'transactionId']);
+    const call = (this.updateCalls.get(a.collectionId) ?? 0) + 1;
+    this.updateCalls.set(a.collectionId, call);
+    if (this.failUpdateOnCall?.collection === a.collectionId && this.failUpdateOnCall.call === call) {
+      this.failUpdateOnCall = null;
+      throw errorWithCode(503);
+    }
     if (a.collectionId === this.failUpdateCollection) { this.failUpdateCollection = null; throw errorWithCode(503); }
     const doc = this.read(a.collectionId, a.documentId, a.transactionId);
     return this.save(a.collectionId, { ...doc, ...a.data,
@@ -111,6 +123,7 @@ class DatabaseDouble {
 
 let db: DatabaseDouble;
 let send: jest.Mock;
+let getUser: jest.Mock;
 const now = () => new Date().toISOString();
 async function invoke(handler: typeof support, body: unknown, userId = 'user-a') {
   return await handler({ req: { body: body as any, headers: { 'x-appwrite-user-id': userId } },
@@ -135,10 +148,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   db = new DatabaseDouble();
   send = jest.fn().mockResolvedValue('provider-message');
+  getUser = jest.fn().mockImplementation(async (id: string) => ({ $id: id, name: 'Trusted ' + id }));
   (loadConfig as jest.Mock).mockReturnValue(config);
   (loadAppwriteConfig as jest.Mock).mockReturnValue(config);
-  (createAdminClients as jest.Mock).mockReturnValue({ databases: db,
-    users: { get: jest.fn().mockImplementation(async (id: string) => ({ $id: id, name: 'Trusted ' + id })) } });
+  (createAdminClients as jest.Mock).mockReturnValue({ databases: db, users: { get: getUser } });
   (getFirebaseMessaging as jest.Mock).mockReturnValue({ send });
   (verifyFirebaseCredentials as jest.Mock).mockResolvedValue(undefined);
   db.seed('jobs', { $id: 'job-a', createdAt: now(), confirmedCount: 0 });
@@ -281,6 +294,49 @@ describe('dispatch jobs, replay, rate limits and provider failure recovery', () 
     });
     await invoke(fanout, request);
     expect(db.all('devices')[0].tokenStatus).toBe('valid');
+  });
+  test('an orphaned account is quarantined while valid recipients continue', async () => {
+    device('device-row-b', 'user-b', 'device-b');
+    getUser.mockImplementation(async (id: string) => {
+      if (id === 'user-a') throw errorWithCode(404);
+      return { $id: id, name: 'Trusted ' + id };
+    });
+    const response = await invoke(fanout, request);
+    expect(response).toMatchObject({ status: 200, body: { status: 'partially_completed' } });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].token).toBe('token-device-row-b');
+    expect(db.all('devices').find((row) => row.userId === 'user-a')).toMatchObject({
+      isActive: false, tokenStatus: 'invalid', receiveStatus: 'failed',
+    });
+    expect(db.all('recipients').find((row) => row.failureCode === 'RECIPIENT_ACCOUNT_MISSING')).toBeDefined();
+    const job = db.all('jobs').find((row) => row.$id === response.body.jobId)!;
+    expect(job).toMatchObject({ status: 'partially_completed', providerAcceptedCount: 1, providerRejectedCount: 1 });
+  });
+  test('all orphaned accounts produce a terminal failed job without an FCM send', async () => {
+    getUser.mockRejectedValue(errorWithCode(404));
+    const response = await invoke(fanout, request);
+    expect(response).toMatchObject({ status: 200, body: { status: 'failed' } });
+    expect(send).not.toHaveBeenCalled();
+    expect(db.all('jobs').find((row) => row.$id === response.body.jobId)).toMatchObject({
+      status: 'failed', providerAcceptedCount: 0, providerRejectedCount: 1,
+    });
+  });
+  test.each([
+    ['token query', () => { db.failListCollection = 'devices'; }],
+    ['account lookup', () => { getUser.mockRejectedValue(errorWithCode(503)); }],
+    ['pending recipient creation', () => { db.failCreateCollection = 'recipients'; }],
+    ['provider result persistence', () => {
+      send.mockImplementation(async () => { db.failUpdateCollection = 'recipients'; return 'provider-message'; });
+    }],
+    ['final job update', () => { db.failUpdateOnCall = { collection: 'jobs', call: 2 }; }],
+  ])('a %s failure does not strand the claimed job in processing', async (_label, arrange) => {
+    arrange();
+    const response = await invoke(fanout, request);
+    expect(response).toMatchObject({ status: 500, body: { code: 'FUNCTION_UNAVAILABLE' } });
+    const claimed = db.all('jobs').find((row) => row.$id !== 'job-a')!;
+    expect(claimed.status).toBe('failed');
+    expect(claimed.completedAt).toEqual(expect.any(String));
+    expect(JSON.stringify(response.body)).not.toContain('Injected failure');
   });
 });
 
